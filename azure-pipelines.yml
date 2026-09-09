@@ -1,0 +1,108 @@
+# =====================================================================
+# Azure DevOps CI Pipeline - Spring Boot Product API (no database)
+# Includes: Build, Unit Tests, Controller Tests, JaCoCo Code Coverage,
+#           and Artifact Publishing
+# =====================================================================
+
+trigger:
+  branches:
+    include:
+      - main
+      - develop
+
+pr:
+  branches:
+    include:
+      - main
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+variables:
+  mavenPOMFile: 'pom.xml'
+  javaVersion: '17'
+
+stages:
+  - stage: Build_And_Test
+    displayName: 'Build, Test & Coverage'
+    jobs:
+      - job: CI_Job
+        displayName: 'CI - Build, Test, Coverage'
+        steps:
+
+          # -----------------------------------------------------------
+          # 1. Setup JDK
+          # -----------------------------------------------------------
+          - task: JavaToolInstaller@0
+            displayName: 'Install JDK $(javaVersion)'
+            inputs:
+              versionSpec: '$(javaVersion)'
+              jdkArchitectureOption: 'x64'
+              jdkSourceOption: 'PreInstalled'
+
+          # -----------------------------------------------------------
+          # 2. Cache Maven dependencies (speeds up subsequent builds)
+          # -----------------------------------------------------------
+          - task: Cache@2
+            displayName: 'Cache Maven local repo'
+            inputs:
+              key: 'maven | "$(Agent.OS)" | **/pom.xml'
+              restoreKeys: |
+                maven | "$(Agent.OS)"
+              path: '$(HOME)/.m2/repository'
+
+          # -----------------------------------------------------------
+          # 3. Build + Run Unit/Controller Tests + Generate JaCoCo Report
+          #    'clean verify' runs: compile -> test -> jacoco:report
+          # -----------------------------------------------------------
+          - task: Maven@4
+            displayName: 'Maven Build + Test + Coverage'
+            inputs:
+              mavenPomFile: '$(mavenPOMFile)'
+              goals: 'clean verify'
+              options: '-B'
+              publishJUnitResults: true
+              testResultsFiles: '**/surefire-reports/TEST-*.xml'
+              testRunTitle: 'Product API Unit & Controller Tests'
+              javaHomeOption: 'JDKVersion'
+              jdkVersionOption: '1.$(javaVersion)'
+              mavenVersionOption: 'Default'
+              mavenOptions: '-Xmx1024m'
+
+          # -----------------------------------------------------------
+          # 4. Publish Code Coverage Results (JaCoCo -> Pipeline UI)
+          # -----------------------------------------------------------
+          - task: PublishCodeCoverageResults@2
+            displayName: 'Publish Code Coverage (JaCoCo)'
+            inputs:
+              summaryFileLocation: '$(System.DefaultWorkingDirectory)/**/target/site/jacoco/jacoco.xml'
+              pathToSources: '$(System.DefaultWorkingDirectory)/src/main/java'
+
+          # -----------------------------------------------------------
+          # 5. Copy Build Artifact (.jar) to Staging Directory
+          # -----------------------------------------------------------
+          - task: CopyFiles@2
+            displayName: 'Copy JAR to Staging Directory'
+            inputs:
+              contents: '**/target/*.jar'
+              targetFolder: '$(Build.ArtifactStagingDirectory)'
+              flattenFolders: true
+
+          # -----------------------------------------------------------
+          # 6. Publish Build Artifact (consumed later by CD pipeline)
+          # -----------------------------------------------------------
+          - task: PublishBuildArtifacts@1
+            displayName: 'Publish Build Artifact'
+            inputs:
+              pathToPublish: '$(Build.ArtifactStagingDirectory)'
+              artifactName: 'drop'
+              publishLocation: 'Container'
+
+# =====================================================================
+# This pipeline needs NOTHING extra configured in Azure - the JaCoCo
+# plugin is already wired into pom.xml (prepare-agent + report goals),
+# so 'mvn clean verify' alone produces:
+#   - Surefire test XML reports  -> target/surefire-reports/
+#   - JaCoCo coverage XML/HTML   -> target/site/jacoco/
+#   - Runnable Spring Boot JAR   -> target/demo-0.0.1-SNAPSHOT.jar
+# =====================================================================
